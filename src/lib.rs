@@ -35,67 +35,27 @@ pub unsafe extern "C" fn flush() {
 }
 
 #[no_mangle]
-pub unsafe extern "C" fn attempt_bmm(
-    critical_hash: *const libc::c_char,
-    block_data: *const libc::c_char,
-    amount: u64,
-) {
+pub unsafe extern "C" fn attempt_bmm(critical_hash: *const libc::c_char, amount: u64) {
+    // FIXME: Figure out if strings should be freed here.
     let critical_hash = CStr::from_ptr(critical_hash).to_str().unwrap();
     let critical_hash = bitcoin::hash_types::TxMerkleNode::from_str(critical_hash).unwrap();
-    let block_data = CStr::from_ptr(block_data).to_str().unwrap();
-    let block_data = hex::decode(block_data).unwrap();
     let amount = bitcoin::Amount::from_sat(amount);
     DRIVECHAIN
         .as_mut()
         .unwrap()
         .write()
         .unwrap()
-        .attempt_bmm(&critical_hash, &block_data, amount)
+        .attempt_bmm(&critical_hash, amount)
         .unwrap();
-}
-
-#[repr(C)]
-pub struct Block {
-    // hex encoded block data
-    pub data: *const libc::c_char,
-    // unix timestamp
-    pub time: i64,
-    // hex encoded main block hash
-    pub main_block_hash: *const libc::c_char,
 }
 
 #[no_mangle]
-pub unsafe extern "C" fn confirm_bmm() -> BMMState {
-    let block = DRIVECHAIN
-        .as_mut()
-        .unwrap()
-        .write()
-        .unwrap()
-        .confirm_bmm()
-        .unwrap();
-    match block {
-        Some(block) => {
-            let data = CString::new(hex::encode(block.data.as_slice())).unwrap();
-            let data = Box::new(data);
-            let data: *const CString = std::mem::transmute(data);
-            let data = (&*data).as_ptr();
-            let time = block.time;
-            let main_block_hash = CString::new(block.main_block_hash.to_string()).unwrap();
-            let main_block_hash = Box::new(main_block_hash);
-            let main_block_hash: *const CString = std::mem::transmute(main_block_hash);
-            let main_block_hash = (&*main_block_hash).as_ptr();
-            // It is the responsibility of the caller to free data,
-            // main_block_hash, and block struct after use.
-            let block = Block {
-                data,
-                time,
-                main_block_hash,
-            };
-            let block = Box::new(block);
-            let block: *const Block = std::mem::transmute(block);
-            block
-        }
-        None => std::ptr::null(),
+pub unsafe extern "C" fn confirm_bmm() -> u32 {
+    match DRIVECHAIN.as_mut().unwrap().write().unwrap().confirm_bmm() {
+        Ok(drivechain::BMMState::Succeded) => 0,
+        Ok(drivechain::BMMState::Failed) => 1,
+        Ok(drivechain::BMMState::Pending) => 2,
+        Err(_) => 1,
     }
 }
 
