@@ -22,12 +22,6 @@ pub unsafe extern "C" fn init(
     DRIVECHAIN = Drivechain::new(db_path, this_sidechain, rpcuser, rpcpassword)
         .map(RwLock::new)
         .ok();
-    dbg!(DRIVECHAIN
-        .as_ref()
-        .unwrap()
-        .read()
-        .unwrap()
-        .format_deposit_address("address"));
 }
 
 #[no_mangle]
@@ -106,6 +100,21 @@ pub unsafe extern "C" fn get_prev_main_block_hash(
     // NOTE: This string must be reconstructed back into CString to be freed.
     // https://doc.rust-lang.org/alloc/ffi/struct.CString.html#method.into_raw
     prev.into_raw()
+}
+
+#[no_mangle]
+pub unsafe extern "C" fn format_deposit_address(
+    address: *const libc::c_char,
+) -> *const libc::c_char {
+    let address = CStr::from_ptr(address).to_str().unwrap();
+    let deposit_address = DRIVECHAIN
+        .as_ref()
+        .unwrap()
+        .read()
+        .unwrap()
+        .format_deposit_address(address);
+    let deposit_address = CString::new(deposit_address).unwrap();
+    deposit_address.into_raw()
 }
 
 #[repr(C)]
