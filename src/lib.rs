@@ -36,17 +36,24 @@ pub unsafe extern "C" fn flush() {
 }
 
 #[no_mangle]
-pub unsafe extern "C" fn attempt_bmm(critical_hash: *const libc::c_char, amount: u64) {
-    // FIXME: Figure out if strings should be freed here.
+pub unsafe extern "C" fn attempt_bmm(
+    critical_hash: *const libc::c_char,
+    prev_main_block_hash: *const libc::c_char,
+    amount: u64,
+) {
+    // FIXME: Figure out if strings have to be explicitly freed here.
     let critical_hash = CStr::from_ptr(critical_hash).to_str().unwrap();
     let critical_hash = bitcoin::hash_types::TxMerkleNode::from_str(critical_hash).unwrap();
+    let prev_main_block_hash = CStr::from_ptr(prev_main_block_hash).to_str().unwrap();
+    let prev_main_block_hash =
+        bitcoin::hash_types::BlockHash::from_str(prev_main_block_hash).unwrap();
     let amount = bitcoin::Amount::from_sat(amount);
     DRIVECHAIN
         .as_mut()
         .unwrap()
         .write()
         .unwrap()
-        .attempt_bmm(&critical_hash, amount)
+        .attempt_bmm(&critical_hash, &prev_main_block_hash, amount)
         .unwrap();
 }
 
@@ -103,6 +110,21 @@ pub unsafe extern "C" fn get_prev_main_block_hash(
 }
 
 #[no_mangle]
+pub unsafe extern "C" fn get_mainchain_tip() -> *const libc::c_char {
+    let tip = DRIVECHAIN
+        .as_ref()
+        .unwrap()
+        .read()
+        .unwrap()
+        .get_mainchain_tip()
+        .unwrap();
+    let tip = CString::new(tip.to_string()).unwrap();
+    // NOTE: This string must be reconstructed back into CString to be freed.
+    // https://doc.rust-lang.org/alloc/ffi/struct.CString.html#method.into_raw
+    tip.into_raw()
+}
+
+#[no_mangle]
 pub unsafe extern "C" fn format_deposit_address(
     address: *const libc::c_char,
 ) -> *const libc::c_char {
@@ -126,6 +148,31 @@ pub struct Deposit {
 #[repr(C)]
 pub struct Deposits {
     pub ptr: *mut Deposit,
+    pub len: usize,
+}
+
+#[repr(C)]
+pub struct Withdrawal {
+    pub id: *const libc::c_char,
+    pub address: [u8; 20],
+    pub amount: u64,
+    pub fee: u64,
+}
+
+#[repr(C)]
+pub struct Withdrawals {
+    pub ptr: *mut Withdrawal,
+    pub len: usize,
+}
+
+#[repr(C)]
+pub struct Refund {
+    pub id: *const libc::c_char,
+}
+
+#[repr(C)]
+pub struct Refunds {
+    pub ptr: *mut Refund,
     pub len: usize,
 }
 
@@ -162,7 +209,12 @@ pub unsafe extern "C" fn get_deposit_outputs() -> Deposits {
 }
 
 #[no_mangle]
-pub unsafe extern "C" fn connect_block(deposits: Deposits, just_check: bool) -> bool {
+pub unsafe extern "C" fn connect_block(
+    deposits: Deposits,
+    withdrawals: Withdrawals,
+    refunds: Refunds,
+    just_check: bool,
+) -> bool {
     let deposits = std::slice::from_raw_parts(deposits.ptr, deposits.len);
     let deposits: Vec<drivechain::Deposit> = deposits
         .iter()
@@ -171,13 +223,35 @@ pub unsafe extern "C" fn connect_block(deposits: Deposits, just_check: bool) -> 
             amount: d.amount,
         })
         .collect();
-    DRIVECHAIN
-        .as_mut()
-        .unwrap()
-        .write()
-        .unwrap()
-        .connect_block(&deposits, &HashMap::new(), &[], just_check)
-        .is_ok()
+    let withdrawals = std::slice::from_raw_parts(withdrawals.ptr, withdrawals.len);
+    let withdrawals: HashMap<Vec<u8>, drivechain::Withdrawal> = withdrawals
+        .iter()
+        .map(|w| {
+            (
+                CStr::from_ptr(w.id).to_bytes().into(),
+                drivechain::Withdrawal {
+                    dest: w.address,
+                    amount: w.amount,
+                    mainchain_fee: w.fee,
+                    // height is set later in Db::connect_withdrawals.
+                    height: 0,
+                },
+            )
+        })
+        .collect();
+    let refunds = std::slice::from_raw_parts(refunds.ptr, refunds.len);
+    let refunds: Vec<Vec<u8>> = refunds
+        .iter()
+        .map(|r| CStr::from_ptr(r.id).to_bytes().into())
+        .collect();
+    let result = DRIVECHAIN.as_mut().unwrap().write().unwrap().connect_block(
+        &deposits,
+        &withdrawals,
+        &refunds,
+        just_check,
+    );
+    dbg!(&result);
+    result.is_ok()
 }
 
 #[no_mangle]
