@@ -139,6 +139,44 @@ pub unsafe extern "C" fn format_deposit_address(
     deposit_address.into_raw()
 }
 
+#[no_mangle]
+pub unsafe extern "C" fn create_deposit(
+    address: *const libc::c_char,
+    amount: u64,
+    fee: u64,
+) -> bool {
+    let address = CStr::from_ptr(address).to_str().unwrap();
+    DRIVECHAIN
+        .as_ref()
+        .unwrap()
+        .read()
+        .unwrap()
+        .create_deposit(
+            address,
+            bitcoin::Amount::from_sat(amount),
+            bitcoin::Amount::from_sat(fee),
+        )
+        .is_ok()
+}
+
+#[repr(C)]
+pub struct WithdrawalAddress {
+    pub address: [u8; 20],
+}
+
+#[no_mangle]
+pub unsafe extern "C" fn get_new_mainchain_address() -> WithdrawalAddress {
+    let address = DRIVECHAIN
+        .as_ref()
+        .unwrap()
+        .read()
+        .unwrap()
+        .get_new_mainchain_address()
+        .unwrap();
+    let address = drivechain::Drivechain::extract_mainchain_address_bytes(&address).unwrap();
+    WithdrawalAddress { address }
+}
+
 #[repr(C)]
 pub struct Deposit {
     pub address: *const libc::c_char,
