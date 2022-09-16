@@ -177,6 +177,17 @@ pub unsafe extern "C" fn get_new_mainchain_address() -> WithdrawalAddress {
     WithdrawalAddress { address }
 }
 
+#[no_mangle]
+pub unsafe extern "C" fn attempt_bundle_broadcast() -> bool {
+    DRIVECHAIN
+        .as_mut()
+        .unwrap()
+        .write()
+        .unwrap()
+        .attempt_bundle_broadcast()
+        .is_ok()
+}
+
 #[repr(C)]
 pub struct Deposit {
     pub address: *const libc::c_char,
@@ -288,7 +299,6 @@ pub unsafe extern "C" fn connect_block(
         &refunds,
         just_check,
     );
-    dbg!(&result);
     result.is_ok()
 }
 
