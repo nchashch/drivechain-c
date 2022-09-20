@@ -7,7 +7,7 @@ edition = "2021"
 
 [dependencies]
 bitcoin = "0.28.1"
-drivechain = { path = "../drivechain" }
+drivechain = { git = "https://github.com/nchashch/drivechain", rev = "b4efe8a6972503dc11fe1ac64331bd7248b63489" }
 hex = "0.4.3"
 libc = "0.2.126"
 
