@@ -5,6 +5,8 @@ use std::ffi::{CStr, CString};
 use std::str::FromStr;
 use std::sync::RwLock;
 
+// FIXME: Refactor long DRIVECHAIN.as_mut().unwrap()..... calls.
+// FIXME: Get rid of all .unwrap() calls.
 static mut DRIVECHAIN: Option<RwLock<Drivechain>> = None;
 
 #[no_mangle]
@@ -84,7 +86,7 @@ pub unsafe extern "C" fn verify_bmm(
         .read()
         .unwrap()
         .verify_bmm(&main_block_hash, &critical_hash)
-        .is_ok()
+        .unwrap()
 }
 
 #[no_mangle]
@@ -178,6 +180,13 @@ pub unsafe extern "C" fn get_new_mainchain_address() -> WithdrawalAddress {
 }
 
 #[no_mangle]
+pub unsafe extern "C" fn format_mainchain_address(dest: WithdrawalAddress) -> *const libc::c_char {
+    let address = drivechain::Drivechain::format_mainchain_address(dest.address).unwrap();
+    let address = CString::new(address).unwrap();
+    address.into_raw()
+}
+
+#[no_mangle]
 pub unsafe extern "C" fn attempt_bundle_broadcast() -> bool {
     DRIVECHAIN
         .as_mut()
@@ -186,6 +195,38 @@ pub unsafe extern "C" fn attempt_bundle_broadcast() -> bool {
         .unwrap()
         .attempt_bundle_broadcast()
         .is_ok()
+}
+
+#[no_mangle]
+pub unsafe extern "C" fn get_unspent_withdrawals() -> Withdrawals {
+    let withdrawals = DRIVECHAIN
+        .as_ref()
+        .unwrap()
+        .read()
+        .unwrap()
+        .get_unspent_withdrawals()
+        .unwrap();
+    let withdrawals: Vec<Withdrawal> = withdrawals
+        .iter()
+        .map(|(id, w)| {
+            let id = CString::new(id.as_slice()).unwrap();
+            Withdrawal {
+                id: id.into_raw(),
+                address: w.dest,
+                amount: w.amount,
+                fee: w.mainchain_fee,
+            }
+        })
+        .collect();
+    // FIXME: Make sure there is no memory leak here. See free_withdrawals
+    // function.
+    let mut withdrawals = withdrawals.into_boxed_slice();
+    let result = Withdrawals {
+        ptr: withdrawals.as_mut_ptr(),
+        len: withdrawals.len(),
+    };
+    std::mem::forget(withdrawals);
+    result
 }
 
 #[repr(C)]
@@ -217,6 +258,7 @@ pub struct Withdrawals {
 #[repr(C)]
 pub struct Refund {
     pub id: *const libc::c_char,
+    pub amount: u64,
 }
 
 #[repr(C)]
@@ -248,6 +290,8 @@ pub unsafe extern "C" fn get_deposit_outputs() -> Deposits {
             }
         })
         .collect();
+    // FIXME: Make sure there is no memory leak here. See free_deposits
+    // function.
     let mut deposits = deposits.into_boxed_slice();
     let result = Deposits {
         ptr: deposits.as_mut_ptr(),
@@ -289,9 +333,9 @@ pub unsafe extern "C" fn connect_block(
         })
         .collect();
     let refunds = std::slice::from_raw_parts(refunds.ptr, refunds.len);
-    let refunds: Vec<Vec<u8>> = refunds
+    let refunds: HashMap<Vec<u8>, u64> = refunds
         .iter()
-        .map(|r| CStr::from_ptr(r.id).to_bytes().into())
+        .map(|r| (CStr::from_ptr(r.id).to_bytes().into(), r.amount))
         .collect();
     let result = DRIVECHAIN.as_mut().unwrap().write().unwrap().connect_block(
         &deposits,
@@ -303,7 +347,12 @@ pub unsafe extern "C" fn connect_block(
 }
 
 #[no_mangle]
-pub unsafe extern "C" fn disconnect_block(deposits: Deposits, just_check: bool) -> bool {
+pub unsafe extern "C" fn disconnect_block(
+    deposits: Deposits,
+    withdrawals: Withdrawals,
+    refunds: Refunds,
+    just_check: bool,
+) -> bool {
     let deposits = std::slice::from_raw_parts(deposits.ptr, deposits.len);
     let deposits: Vec<drivechain::Deposit> = deposits
         .iter()
@@ -312,12 +361,22 @@ pub unsafe extern "C" fn disconnect_block(deposits: Deposits, just_check: bool) 
             amount: d.amount,
         })
         .collect();
+    let withdrawals = std::slice::from_raw_parts(withdrawals.ptr, withdrawals.len);
+    let withdrawals: Vec<Vec<u8>> = withdrawals
+        .iter()
+        .map(|w| CStr::from_ptr(w.id).to_bytes().into())
+        .collect();
+    let refunds = std::slice::from_raw_parts(refunds.ptr, refunds.len);
+    let refunds: Vec<Vec<u8>> = refunds
+        .iter()
+        .map(|r| CStr::from_ptr(r.id).to_bytes().into())
+        .collect();
     DRIVECHAIN
         .as_mut()
         .unwrap()
         .write()
         .unwrap()
-        .disconnect_block(&deposits, &[], &[], just_check)
+        .disconnect_block(&deposits, &withdrawals, &refunds, just_check)
         .is_ok()
 }
 
@@ -336,4 +395,13 @@ pub unsafe extern "C" fn free_deposits(deposits: Deposits) {
     }
     // Free slice memory.
     std::ptr::drop_in_place(deposits);
+}
+
+#[no_mangle]
+pub unsafe extern "C" fn free_withdrawals(withdrawals: Withdrawals) {
+    let withdrawals = std::slice::from_raw_parts_mut(withdrawals.ptr, withdrawals.len);
+    for withdrawal in withdrawals.iter() {
+        free_string(withdrawal.id);
+    }
+    std::ptr::drop_in_place(withdrawals);
 }
