@@ -381,6 +381,18 @@ pub unsafe extern "C" fn disconnect_block(
 }
 
 #[no_mangle]
+pub unsafe extern "C" fn is_outpoint_spent(outpoint: *const libc::c_char) -> bool {
+    let outpoint = CStr::from_ptr(outpoint).to_bytes();
+    DRIVECHAIN
+        .as_mut()
+        .unwrap()
+        .write()
+        .unwrap()
+        .is_outpoint_spent(outpoint)
+        .unwrap()
+}
+
+#[no_mangle]
 pub unsafe extern "C" fn free_string(string: *const libc::c_char) {
     drop(CString::from_raw(string as *mut libc::c_char));
 }
