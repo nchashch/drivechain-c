@@ -3,12 +3,18 @@ use drivechain::*;
 use std::collections::HashMap;
 use std::ffi::{CStr, CString};
 use std::str::FromStr;
-use std::sync::RwLock;
-use ureq;
+use std::sync::{RwLock, RwLockReadGuard, RwLockWriteGuard};
 
-// FIXME: Refactor long DRIVECHAIN.as_mut().unwrap()..... calls.
 // FIXME: Get rid of all .unwrap() calls.
 static mut DRIVECHAIN: Option<RwLock<Drivechain>> = None;
+
+unsafe fn read_drivechain<'r>() -> RwLockReadGuard<'r, Drivechain> {
+    DRIVECHAIN.as_mut().unwrap().read().unwrap()
+}
+
+unsafe fn write_drivechain<'r>() -> RwLockWriteGuard<'r, Drivechain> {
+    DRIVECHAIN.as_mut().unwrap().write().unwrap()
+}
 
 #[no_mangle]
 pub unsafe extern "C" fn init(
@@ -16,26 +22,23 @@ pub unsafe extern "C" fn init(
     // done.
     db_path: *const libc::c_char,
     this_sidechain: usize,
+    host: *const libc::c_char,
+    port: u16,
     rpcuser: *const libc::c_char,
     rpcpassword: *const libc::c_char,
 ) {
     let db_path = CStr::from_ptr(db_path).to_str().unwrap();
+    let host = CStr::from_ptr(host).to_str().unwrap();
     let rpcuser = CStr::from_ptr(rpcuser).to_str().unwrap();
     let rpcpassword = CStr::from_ptr(rpcpassword).to_str().unwrap();
-    DRIVECHAIN = Drivechain::new(db_path, this_sidechain, rpcuser, rpcpassword)
+    DRIVECHAIN = Drivechain::new(db_path, this_sidechain, host, port, rpcuser, rpcpassword)
         .map(RwLock::new)
         .ok();
 }
 
 #[no_mangle]
 pub unsafe extern "C" fn flush() {
-    DRIVECHAIN
-        .as_mut()
-        .unwrap()
-        .write()
-        .unwrap()
-        .flush()
-        .unwrap();
+    write_drivechain().flush().unwrap();
 }
 
 #[no_mangle]
@@ -51,11 +54,7 @@ pub unsafe extern "C" fn attempt_bmm(
     let prev_main_block_hash =
         bitcoin::hash_types::BlockHash::from_str(prev_main_block_hash).unwrap();
     let amount = bitcoin::Amount::from_sat(amount);
-    let result = DRIVECHAIN.as_mut().unwrap().write().unwrap().attempt_bmm(
-        &critical_hash,
-        &prev_main_block_hash,
-        amount,
-    );
+    let result = write_drivechain().attempt_bmm(&critical_hash, &prev_main_block_hash, amount);
     // FIXME: Don't unwrap here, it causes crashes when too many blocks are
     // mined. Or when fee is too low.
     if let Err(Error::Client(ClientError::Ureq(ureq::Error::Status(_, resp)))) = result {
@@ -65,7 +64,7 @@ pub unsafe extern "C" fn attempt_bmm(
 
 #[no_mangle]
 pub unsafe extern "C" fn confirm_bmm() -> u32 {
-    match DRIVECHAIN.as_mut().unwrap().write().unwrap().confirm_bmm() {
+    match write_drivechain().confirm_bmm() {
         Ok(drivechain::BMMState::Succeded) => 0,
         Ok(drivechain::BMMState::Failed) => 1,
         Ok(drivechain::BMMState::Pending) => 2,
@@ -84,11 +83,7 @@ pub unsafe extern "C" fn verify_bmm(
     let critical_hash = CStr::from_ptr(critical_hash);
     let critical_hash =
         bitcoin::hash_types::TxMerkleNode::from_str(critical_hash.to_str().unwrap()).unwrap();
-    DRIVECHAIN
-        .as_ref()
-        .unwrap()
-        .read()
-        .unwrap()
+    read_drivechain()
         .verify_bmm(&main_block_hash, &critical_hash)
         .unwrap()
 }
@@ -102,11 +97,7 @@ pub unsafe extern "C" fn get_prev_main_block_hash(
     let main_block_hash = CStr::from_ptr(main_block_hash);
     let main_block_hash =
         bitcoin::hash_types::BlockHash::from_str(main_block_hash.to_str().unwrap()).unwrap();
-    let prev = DRIVECHAIN
-        .as_ref()
-        .unwrap()
-        .read()
-        .unwrap()
+    let prev = read_drivechain()
         .get_prev_main_block_hash(&main_block_hash)
         .unwrap();
     let prev = CString::new(prev.to_string()).unwrap();
@@ -117,13 +108,7 @@ pub unsafe extern "C" fn get_prev_main_block_hash(
 
 #[no_mangle]
 pub unsafe extern "C" fn get_mainchain_tip() -> *const libc::c_char {
-    let tip = DRIVECHAIN
-        .as_ref()
-        .unwrap()
-        .read()
-        .unwrap()
-        .get_mainchain_tip()
-        .unwrap();
+    let tip = read_drivechain().get_mainchain_tip().unwrap();
     let tip = CString::new(tip.to_string()).unwrap();
     // NOTE: This string must be reconstructed back into CString to be freed.
     // https://doc.rust-lang.org/alloc/ffi/struct.CString.html#method.into_raw
@@ -135,12 +120,7 @@ pub unsafe extern "C" fn format_deposit_address(
     address: *const libc::c_char,
 ) -> *const libc::c_char {
     let address = CStr::from_ptr(address).to_str().unwrap();
-    let deposit_address = DRIVECHAIN
-        .as_ref()
-        .unwrap()
-        .read()
-        .unwrap()
-        .format_deposit_address(address);
+    let deposit_address = read_drivechain().format_deposit_address(address);
     let deposit_address = CString::new(deposit_address).unwrap();
     deposit_address.into_raw()
 }
@@ -152,11 +132,7 @@ pub unsafe extern "C" fn create_deposit(
     fee: u64,
 ) -> bool {
     let address = CStr::from_ptr(address).to_str().unwrap();
-    DRIVECHAIN
-        .as_ref()
-        .unwrap()
-        .read()
-        .unwrap()
+    read_drivechain()
         .create_deposit(
             address,
             bitcoin::Amount::from_sat(amount),
@@ -172,13 +148,7 @@ pub struct WithdrawalAddress {
 
 #[no_mangle]
 pub unsafe extern "C" fn get_new_mainchain_address() -> WithdrawalAddress {
-    let address = DRIVECHAIN
-        .as_ref()
-        .unwrap()
-        .read()
-        .unwrap()
-        .get_new_mainchain_address()
-        .unwrap();
+    let address = read_drivechain().get_new_mainchain_address().unwrap();
     let address = drivechain::Drivechain::extract_mainchain_address_bytes(&address).unwrap();
     WithdrawalAddress { address }
 }
@@ -192,24 +162,12 @@ pub unsafe extern "C" fn format_mainchain_address(dest: WithdrawalAddress) -> *c
 
 #[no_mangle]
 pub unsafe extern "C" fn attempt_bundle_broadcast() -> bool {
-    DRIVECHAIN
-        .as_mut()
-        .unwrap()
-        .write()
-        .unwrap()
-        .attempt_bundle_broadcast()
-        .is_ok()
+    write_drivechain().attempt_bundle_broadcast().is_ok()
 }
 
 #[no_mangle]
 pub unsafe extern "C" fn get_unspent_withdrawals() -> Withdrawals {
-    let withdrawals = DRIVECHAIN
-        .as_ref()
-        .unwrap()
-        .read()
-        .unwrap()
-        .get_unspent_withdrawals()
-        .unwrap();
+    let withdrawals = read_drivechain().get_unspent_withdrawals().unwrap();
     let withdrawals: Vec<Withdrawal> = withdrawals
         .iter()
         .map(|(id, w)| {
@@ -271,17 +229,11 @@ pub struct Refunds {
     pub len: usize,
 }
 
-#[no_mangle]
 // NOTE: The caller is responsible for freeing Deposits by calling free_deposits
 // after a more memory safe "Deposits" data structure is constructed.
+#[no_mangle]
 pub unsafe extern "C" fn get_deposit_outputs() -> Deposits {
-    let deposits = DRIVECHAIN
-        .as_ref()
-        .unwrap()
-        .read()
-        .unwrap()
-        .get_deposit_outputs()
-        .unwrap();
+    let deposits = read_drivechain().get_deposit_outputs().unwrap();
     let deposits: Vec<Deposit> = deposits
         .into_iter()
         .map(|d| {
@@ -341,12 +293,7 @@ pub unsafe extern "C" fn connect_block(
         .iter()
         .map(|r| (CStr::from_ptr(r.id).to_bytes().into(), r.amount))
         .collect();
-    let result = DRIVECHAIN.as_mut().unwrap().write().unwrap().connect_block(
-        &deposits,
-        &withdrawals,
-        &refunds,
-        just_check,
-    );
+    let result = write_drivechain().connect_block(&deposits, &withdrawals, &refunds, just_check);
     result.is_ok()
 }
 
@@ -375,11 +322,7 @@ pub unsafe extern "C" fn disconnect_block(
         .iter()
         .map(|r| CStr::from_ptr(r.id).to_bytes().into())
         .collect();
-    DRIVECHAIN
-        .as_mut()
-        .unwrap()
-        .write()
-        .unwrap()
+    write_drivechain()
         .disconnect_block(&deposits, &withdrawals, &refunds, just_check)
         .is_ok()
 }
@@ -387,13 +330,7 @@ pub unsafe extern "C" fn disconnect_block(
 #[no_mangle]
 pub unsafe extern "C" fn is_outpoint_spent(outpoint: *const libc::c_char) -> bool {
     let outpoint = CStr::from_ptr(outpoint).to_bytes();
-    DRIVECHAIN
-        .as_mut()
-        .unwrap()
-        .write()
-        .unwrap()
-        .is_outpoint_spent(outpoint)
-        .unwrap()
+    write_drivechain().is_outpoint_spent(outpoint).unwrap()
 }
 
 #[no_mangle]

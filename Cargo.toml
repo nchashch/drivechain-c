@@ -6,8 +6,8 @@ edition = "2021"
 # See more keys and their definitions at https://doc.rust-lang.org/cargo/reference/manifest.html
 
 [dependencies]
-bitcoin = "0.28.1"
-drivechain = { git = "https://github.com/nchashch/drivechain", rev = "56ba8ab0e6e8a1da5cf1bb2cd628f7a2ff195c4f" }
+bitcoin = "0.29.1"
+drivechain = { git = "https://github.com/nchashch/drivechain", rev = "c2b37b1c53d09a542b081a0e63fa0cacd14fa65e" }
 hex = "0.4.3"
 libc = "0.2.126"
 ureq = { version = "2.4", features = ["json"] }
