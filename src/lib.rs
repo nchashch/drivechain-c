@@ -54,11 +54,9 @@ pub unsafe extern "C" fn attempt_bmm(
     let prev_main_block_hash =
         bitcoin::hash_types::BlockHash::from_str(prev_main_block_hash).unwrap();
     let amount = bitcoin::Amount::from_sat(amount);
-    let result = write_drivechain().attempt_bmm(&critical_hash, &prev_main_block_hash, amount);
-    // FIXME: Don't unwrap here, it causes crashes when too many blocks are
-    // mined. Or when fee is too low.
-    if let Err(Error::Client(ClientError::Ureq(ureq::Error::Status(_, resp)))) = result {
-        dbg!(resp.into_string());
+    match write_drivechain().attempt_bmm(&critical_hash, &prev_main_block_hash, amount) {
+        Ok(_) => (),
+        Err(_) => println!("attempt_bmm call failed"),
     }
 }
 
