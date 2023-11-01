@@ -26,7 +26,7 @@ pub unsafe extern "C" fn init(
     port: u16,
     rpcuser: *const libc::c_char,
     rpcpassword: *const libc::c_char,
-) {
+) -> bool {
     let db_path = CStr::from_ptr(db_path).to_str().unwrap();
     let host = CStr::from_ptr(host).to_str().unwrap();
     let rpcuser = CStr::from_ptr(rpcuser).to_str().unwrap();
@@ -34,11 +34,12 @@ pub unsafe extern "C" fn init(
     DRIVECHAIN = Drivechain::new(db_path, this_sidechain, host, port, rpcuser, rpcpassword)
         .map(RwLock::new)
         .ok();
+    DRIVECHAIN.is_some()
 }
 
 #[no_mangle]
-pub unsafe extern "C" fn flush() {
-    write_drivechain().flush().unwrap();
+pub unsafe extern "C" fn flush() -> usize {
+    write_drivechain().flush().unwrap()
 }
 
 #[no_mangle]
@@ -83,7 +84,7 @@ pub unsafe extern "C" fn verify_bmm(
         bitcoin::hash_types::TxMerkleNode::from_str(critical_hash.to_str().unwrap()).unwrap();
     read_drivechain()
         .verify_bmm(&main_block_hash, &critical_hash)
-        .unwrap()
+        .unwrap_or(false)
 }
 
 #[no_mangle]
@@ -97,8 +98,8 @@ pub unsafe extern "C" fn get_prev_main_block_hash(
         bitcoin::hash_types::BlockHash::from_str(main_block_hash.to_str().unwrap()).unwrap();
     let prev = read_drivechain()
         .get_prev_main_block_hash(&main_block_hash)
-        .unwrap();
-    let prev = CString::new(prev.to_string()).unwrap();
+        .map(|prev| CString::new(prev.to_string()).unwrap())
+        .unwrap_or(CString::new("").unwrap());
     // NOTE: This string must be reconstructed back into CString to be freed.
     // https://doc.rust-lang.org/alloc/ffi/struct.CString.html#method.into_raw
     prev.into_raw()
@@ -106,8 +107,10 @@ pub unsafe extern "C" fn get_prev_main_block_hash(
 
 #[no_mangle]
 pub unsafe extern "C" fn get_mainchain_tip() -> *const libc::c_char {
-    let tip = read_drivechain().get_mainchain_tip().unwrap();
-    let tip = CString::new(tip.to_string()).unwrap();
+    let tip = read_drivechain()
+        .get_mainchain_tip()
+        .map(|tip| CString::new(tip.to_string()).unwrap())
+        .unwrap_or(CString::new("").unwrap());
     // NOTE: This string must be reconstructed back into CString to be freed.
     // https://doc.rust-lang.org/alloc/ffi/struct.CString.html#method.into_raw
     tip.into_raw()
@@ -197,6 +200,7 @@ pub struct Deposit {
 
 #[repr(C)]
 pub struct Deposits {
+    pub valid: bool,
     pub ptr: *mut Deposit,
     pub len: usize,
 }
@@ -231,7 +235,19 @@ pub struct Refunds {
 // after a more memory safe "Deposits" data structure is constructed.
 #[no_mangle]
 pub unsafe extern "C" fn get_deposit_outputs() -> Deposits {
-    let deposits = read_drivechain().get_deposit_outputs().unwrap();
+    let deposits = match read_drivechain().get_deposit_outputs() {
+        Ok(deposits) => deposits,
+        Err(_) => {
+            let mut deposits = vec![].into_boxed_slice();
+            let result = Deposits {
+                valid: false,
+                ptr: deposits.as_mut_ptr(),
+                len: deposits.len(),
+            };
+            std::mem::forget(deposits);
+            return result;
+        }
+    };
     let deposits: Vec<Deposit> = deposits
         .into_iter()
         .map(|d| {
@@ -248,6 +264,7 @@ pub unsafe extern "C" fn get_deposit_outputs() -> Deposits {
     // function.
     let mut deposits = deposits.into_boxed_slice();
     let result = Deposits {
+        valid: true,
         ptr: deposits.as_mut_ptr(),
         len: deposits.len(),
     };
@@ -328,7 +345,9 @@ pub unsafe extern "C" fn disconnect_block(
 #[no_mangle]
 pub unsafe extern "C" fn is_outpoint_spent(outpoint: *const libc::c_char) -> bool {
     let outpoint = CStr::from_ptr(outpoint).to_bytes();
-    write_drivechain().is_outpoint_spent(outpoint).unwrap()
+    read_drivechain()
+        .is_outpoint_spent(outpoint)
+        .unwrap_or(true)
 }
 
 #[no_mangle]
